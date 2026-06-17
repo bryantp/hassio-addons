@@ -3,23 +3,128 @@ set -euo pipefail
 
 CONFIG_PATH=/data/options.json
 UPLOADER_CONF=/etc/uploader.conf
+REFRESH_TOKEN_CACHE=/data/refresh_token
+LAST_AUTH_CODE_FILE=/data/last_auth_code
 
 APP_KEY=$(jq --raw-output '.app_key // empty' "$CONFIG_PATH")
 APP_SECRET=$(jq --raw-output '.app_secret // empty' "$CONFIG_PATH")
-REFRESH_TOKEN=$(jq --raw-output '.refresh_token // empty' "$CONFIG_PATH")
+AUTH_CODE=$(jq --raw-output '.auth_code // empty' "$CONFIG_PATH")
+CONFIG_REFRESH_TOKEN=$(jq --raw-output '.refresh_token // empty' "$CONFIG_PATH")
 OUTPUT_DIR=$(jq --raw-output '.output // empty' "$CONFIG_PATH")
 KEEP_LAST=$(jq --raw-output '.keep_last // empty' "$CONFIG_PATH")
 FILETYPES=$(jq --raw-output '.filetypes // empty' "$CONFIG_PATH")
 
-if [[ -z "$APP_KEY" || -z "$APP_SECRET" || -z "$REFRESH_TOKEN" ]]; then
-    echo "[Error] app_key, app_secret, and refresh_token are all required."
-    echo "[Error] See the add-on README for how to generate them."
+if [[ -z "$APP_KEY" || -z "$APP_SECRET" ]]; then
+    echo "[Error] app_key and app_secret are required."
+    echo "[Error] Get them from your Dropbox app's Settings tab:"
+    echo "[Error]   https://www.dropbox.com/developers/apps"
     exit 1
 fi
 
 if [[ -z "$OUTPUT_DIR" ]]; then
     OUTPUT_DIR="/"
 fi
+
+print_authorize_url() {
+    echo "[Info]   https://www.dropbox.com/oauth2/authorize?client_id=${APP_KEY}&response_type=code&token_access_type=offline"
+}
+
+print_authorization_instructions() {
+    echo "[Error] No Dropbox authorization on file. To authorize this add-on:"
+    echo "[Error]"
+    echo "[Error]   1. Open this URL in a browser (you may need to log in to Dropbox):"
+    print_authorize_url | sed 's/^\[Info\]/[Error]/'
+    echo "[Error]"
+    echo "[Error]   2. Click 'Continue' and then 'Allow'."
+    echo "[Error]   3. Copy the authorization code Dropbox displays."
+    echo "[Error]   4. Paste it into the 'auth_code' field on this add-on's Configuration tab."
+    echo "[Error]   5. Save and restart the add-on."
+    echo "[Error]"
+    echo "[Error] The auth_code is single-use and expires within minutes. After"
+    echo "[Error] exchange, the add-on stores the long-lived refresh_token in"
+    echo "[Error] /data/refresh_token and ignores auth_code on future starts."
+}
+
+# Exchange an authorization code for a refresh_token + cache it to /data.
+exchange_auth_code() {
+    local code="$1"
+    local resp_file=/tmp/exchange_resp
+    local status
+
+    echo "[Info] Exchanging auth_code for a refresh_token..."
+    status=$(curl -s -o "$resp_file" -w "%{http_code}" \
+        -d "code=${code}" \
+        -d grant_type=authorization_code \
+        -u "${APP_KEY}:${APP_SECRET}" \
+        https://api.dropbox.com/oauth2/token || echo "000")
+
+    if [[ "$status" != "200" ]]; then
+        echo "[Error] auth_code exchange failed (HTTP ${status})."
+        echo "[Error] Response body:"
+        sed 's/^/[Error]   /' "$resp_file"
+        local dropbox_error
+        dropbox_error=$(jq -r '.error // empty' "$resp_file" 2>/dev/null || true)
+        case "$dropbox_error" in
+            invalid_grant)
+                echo "[Error] => auth_code is invalid, already used, or expired."
+                echo "[Error]    Auth codes are single-use and last only a few minutes."
+                echo "[Error]    Visit the URL again to get a fresh code:"
+                print_authorize_url | sed 's/^\[Info\]/[Error]/'
+                ;;
+            invalid_client)
+                echo "[Error] => app_key and app_secret do not match a valid Dropbox app."
+                ;;
+        esac
+        return 1
+    fi
+
+    local refresh
+    refresh=$(jq -r '.refresh_token // empty' "$resp_file")
+    if [[ -z "$refresh" ]]; then
+        echo "[Error] Dropbox accepted the auth_code but did not return a refresh_token."
+        echo "[Error] This means the authorize URL was missing token_access_type=offline."
+        echo "[Error] Visit the URL below to get a fresh auth_code with the right scope:"
+        print_authorize_url | sed 's/^\[Info\]/[Error]/'
+        return 1
+    fi
+
+    umask 077
+    printf '%s' "$refresh" > "$REFRESH_TOKEN_CACHE"
+    echo "[Info] refresh_token cached in add-on persistent storage."
+    echo "[Info] You may now clear the auth_code field on the Configuration tab"
+    echo "[Info] (it is single-use; the cached refresh_token is used on future starts)."
+    return 0
+}
+
+# Resolve a usable refresh_token, in order of precedence:
+#   1. A NEW auth_code in config that we haven't seen before -> exchange it.
+#   2. A cached refresh_token in /data/refresh_token.
+#   3. A legacy refresh_token in config -> cache and use.
+#   4. Nothing -> print authorize URL and exit.
+prev_auth_code=""
+if [[ -s "$LAST_AUTH_CODE_FILE" ]]; then
+    prev_auth_code=$(cat "$LAST_AUTH_CODE_FILE")
+fi
+
+if [[ -n "$AUTH_CODE" && "$AUTH_CODE" != "$prev_auth_code" ]]; then
+    if ! exchange_auth_code "$AUTH_CODE"; then
+        exit 1
+    fi
+    umask 077
+    printf '%s' "$AUTH_CODE" > "$LAST_AUTH_CODE_FILE"
+fi
+
+if [[ ! -s "$REFRESH_TOKEN_CACHE" ]]; then
+    if [[ -n "$CONFIG_REFRESH_TOKEN" ]]; then
+        umask 077
+        printf '%s' "$CONFIG_REFRESH_TOKEN" > "$REFRESH_TOKEN_CACHE"
+    else
+        print_authorization_instructions
+        exit 1
+    fi
+fi
+
+REFRESH_TOKEN=$(cat "$REFRESH_TOKEN_CACHE")
 
 umask 077
 cat > "$UPLOADER_CONF" <<EOF
@@ -32,8 +137,7 @@ OAUTH_ACCESS_TOKEN_EXPIRE=0
 EOF
 
 # -d puts dropbox_uploader.sh in debug mode, which preserves the response
-# file at the known path /tmp/du_resp_debug so we can surface the actual
-# Dropbox error body when something fails. -s skips files that already
+# file at the known path /tmp/du_resp_debug. -s skips files that already
 # exist in Dropbox.
 RESPONSE_FILE=/tmp/du_resp_debug
 
@@ -59,10 +163,8 @@ if [[ -n "$KEEP_LAST" ]]; then
 fi
 echo "[Info] ---------------------------------------"
 
-# dropbox_uploader.sh silently swallows refresh-token errors (it never
-# checks the HTTP status of the /oauth2/token call and just runs
-# requests with an empty Bearer token if the refresh failed), so do the
-# refresh exchange ourselves first and surface Dropbox's actual error.
+# dropbox_uploader.sh silently swallows refresh-token errors, so verify
+# the refresh exchange ourselves first to surface Dropbox's real error.
 echo "[Info] Verifying Dropbox credentials..."
 AUTH_RESPONSE=/tmp/oauth_resp
 HTTP_STATUS=$(curl -s -o "$AUTH_RESPONSE" -w "%{http_code}" \
@@ -79,17 +181,16 @@ if [[ "$HTTP_STATUS" != "200" ]] || ! jq -e '.access_token' "$AUTH_RESPONSE" > /
     case "$DROPBOX_ERROR" in
         invalid_client)
             echo "[Error] => 'invalid_client' means app_key and app_secret do not match a valid Dropbox app."
-            echo "[Error]    Check Settings tab in your Dropbox app for the correct App key and (click Show) App secret."
             ;;
         invalid_grant)
-            echo "[Error] => 'invalid_grant' means the refresh_token is bad — wrong app, revoked, or never offline-scoped."
-            echo "[Error]    Re-run get_refresh_token.py (which uses token_access_type=offline) to mint a new one."
+            echo "[Error] => 'invalid_grant' means the cached refresh_token is no longer valid"
+            echo "[Error]    (revoked, app credentials rotated, or never offline-scoped)."
+            echo "[Error]    To re-authorize: paste a fresh auth_code into the Configuration tab."
+            echo "[Error]    Get one here:"
+            print_authorize_url | sed 's/^\[Info\]/[Error]/'
             ;;
         *)
-            echo "[Error] Common causes:"
-            echo "[Error]   * The app_key, app_secret, or refresh_token in the add-on Configuration tab is wrong."
-            echo "[Error]   * The refresh_token was minted before the Dropbox app's Permissions were granted/submitted."
-            echo "[Error]   * The Dropbox app's Permissions tab is missing files.content.write / files.content.read, and Submit was never clicked at the bottom of that tab."
+            echo "[Error] Re-authorize by pasting a fresh auth_code into the Configuration tab."
             ;;
     esac
     exit 1
