@@ -21,9 +21,6 @@ if [[ -z "$OUTPUT_DIR" ]]; then
     OUTPUT_DIR="/"
 fi
 
-echo "[Info] Files will be uploaded to: ${OUTPUT_DIR}"
-
-# Write the v2.0 config consumed by dropbox_uploader.sh.
 umask 077
 cat > "$UPLOADER_CONF" <<EOF
 CONFIGFILE_VERSION=2.0
@@ -38,6 +35,40 @@ uploader() {
     /dropbox_uploader.sh -s -f "$UPLOADER_CONF" "$@"
 }
 
+print_last_response() {
+    local last
+    last=$(ls -t /tmp/du_resp_* 2>/dev/null | head -1 || true)
+    if [[ -n "$last" && -s "$last" ]]; then
+        echo "[Debug] Dropbox response body:"
+        sed 's/^/[Debug]   /' "$last"
+    fi
+}
+
+echo "[Info] ----- Dropbox Sync configuration -----"
+echo "[Info] Backups source dir:    /backup"
+if [[ -n "$FILETYPES" ]]; then
+    echo "[Info] Share source dir:      /share (extensions: ${FILETYPES})"
+fi
+echo "[Info] Dropbox destination:   ${OUTPUT_DIR}"
+if [[ -n "$KEEP_LAST" ]]; then
+    echo "[Info] Keep last:             ${KEEP_LAST} backup(s) on the Supervisor"
+fi
+echo "[Info] ---------------------------------------"
+
+echo "[Info] Verifying Dropbox credentials..."
+if ! uploader info > /tmp/info_out 2>&1; then
+    echo "[Error] Dropbox authentication failed."
+    sed 's/^/[Error]   /' /tmp/info_out
+    print_last_response
+    echo "[Error] Common causes:"
+    echo "[Error]   * The Dropbox app's Permissions tab is missing files.content.write / files.content.read, or you forgot to click Submit at the bottom of that tab."
+    echo "[Error]   * The refresh_token was minted before the permissions were granted — re-run get_refresh_token.py to mint a new one."
+    echo "[Error]   * The app_key, app_secret, or refresh_token in the add-on Configuration tab is wrong."
+    exit 1
+fi
+sed 's/^/[Info]   /' /tmp/info_out
+echo "[Info] Authentication OK."
+
 echo "[Info] Listening for messages via stdin service call..."
 
 while read -r msg; do
@@ -46,15 +77,18 @@ while read -r msg; do
     echo "[Info] Received message with command ${cmd}"
 
     if [[ "$cmd" = "upload" ]]; then
-        echo "[Info] Uploading all .tar files in /backup (skipping those already in Dropbox)"
+        echo "[Info] Uploading all .tar files in /backup to ${OUTPUT_DIR} (skipping those already in Dropbox)"
         shopt -s nullglob
         for f in /backup/*.tar; do
-            uploader upload "$f" "$OUTPUT_DIR" || echo "[Warn] Upload failed for $f"
+            if ! uploader upload "$f" "$OUTPUT_DIR"; then
+                echo "[Warn] Upload failed for $f"
+                print_last_response
+            fi
         done
         shopt -u nullglob
 
         if [[ -n "$KEEP_LAST" ]]; then
-            echo "[Info] keep_last option is set, cleaning up old backups..."
+            echo "[Info] keep_last option is set, pruning Supervisor backups..."
             python3 /keep_last.py "$KEEP_LAST" || echo "[Warn] keep_last cleanup failed"
         fi
 
@@ -62,7 +96,10 @@ while read -r msg; do
             echo "[Info] filetypes option is set, scanning /share for extensions: ${FILETYPES}"
             find /share -regextype posix-extended -regex "^.*\.(${FILETYPES})\$" -print0 \
                 | while IFS= read -r -d '' f; do
-                    uploader upload "$f" "$OUTPUT_DIR" || echo "[Warn] Upload failed for $f"
+                    if ! uploader upload "$f" "$OUTPUT_DIR"; then
+                        echo "[Warn] Upload failed for $f"
+                        print_last_response
+                    fi
                 done
         fi
     else
