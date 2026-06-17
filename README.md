@@ -1,36 +1,28 @@
-# Hass.io Add-ons for Home Assistant
+# Home Assistant Add-ons
 
-[![License][license-shield]](LICENSE.md)
+[![License][license-shield]](LICENSE)
 
-## About
-
-This repository collects all of my Hass.io add-ons for easier installation.
+A small personal repository of Home Assistant add-ons.
 
 ## Installation
 
-Follow [the official instructions](https://home-assistant.io/hassio/installing_third_party_addons/) on the Home Assistant website and use the following URL:
-```txt
-https://github.com/danielwelch/hassio-addons
-```
+In Home Assistant, go to **Settings → Add-ons → Add-on Store → ⋮ → Repositories**
+and add the URL of this repository. The add-ons below will then appear in the
+store and the Supervisor will build them on your device on first install.
 
-## Add-ons provided by this repository
+## Add-ons
 
-### [Dropbox Sync][addon-dropbox-sync]
+### [Dropbox Sync](./dropbox-sync)
 
-![Supports armhf Architecture][dropbox-sync-armhf-shield]
-![Supports aarch64 Architecture][dropbox-sync-aarch64-shield]
-![Supports amd64 Architecture][dropbox-sync-amd64-shield]
-![Supports i386 Architecture][dropbox-sync-i386-shield]
-![Docker Pulls][dropbox-sync-pulls-shield]
+Upload your Home Assistant backups to Dropbox. Uses Dropbox API v2 with the
+modern refresh-token OAuth flow. See [the add-on README](./dropbox-sync/README.md)
+for setup.
 
-Upload your Hass.io backups to Dropbox.
+## Credit
 
-[:books: Dropbox Sync add-on documentation][addon-dropbox-sync]
+The original `dropbox-sync` add-on is by [@danielwelch][upstream]. This
+repository is a personal fork that modernizes it for Dropbox API v2 and the
+current Home Assistant Supervisor.
 
-[addon-dropbox-sync]: https://github.com/danielwelch/hassio-dropbox-sync
-[dropbox-sync-armhf-shield]: https://img.shields.io/badge/armhf-yes-green.svg?style=flat
-[dropbox-sync-aarch64-shield]: https://img.shields.io/badge/aarch64-yes-green.svg?style=flat
-[dropbox-sync-amd64-shield]: https://img.shields.io/badge/amd64-yes-green.svg?style=flat
-[dropbox-sync-i386-shield]: https://img.shields.io/badge/i386-yes-green.svg?style=flat
-[dropbox-sync-pulls-shield]: https://img.shields.io/docker/pulls/dwelch2101/dropbox-sync-armhf.svg?style=flat
-[license-shield]: https://img.shields.io/github/license/danielwelch/hassio-addons.svg?style=flat
+[upstream]: https://github.com/danielwelch/hassio-dropbox-sync
+[license-shield]: https://img.shields.io/badge/license-MIT-blue.svg?style=flat
