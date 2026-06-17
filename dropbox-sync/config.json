@@ -1,14 +1,15 @@
 {
   "name": "Dropbox Sync",
-  "version": "1.3.0",
+  "version": "2.0.0",
   "slug": "dropbox_sync",
-  "description": "Upload your Hass.io backups to Dropbox",
+  "description": "Upload your Home Assistant backups to Dropbox",
   "url": "https://github.com/danielwelch/hassio-dropbox-sync",
   "startup": "before",
-    "arch": [
+  "arch": [
     "aarch64",
     "amd64",
     "armhf",
+    "armv7",
     "i386"
   ],
   "stdin": true,
@@ -17,14 +18,17 @@
   "boot": "auto",
   "map": ["backup", "share"],
   "options": {
-    "oauth_access_token": "<YOUR_ACCESS_TOKEN>",
+    "app_key": "",
+    "app_secret": "",
+    "refresh_token": "",
     "output": ""
   },
   "schema": {
-    "oauth_access_token": "str",
+    "app_key": "str",
+    "app_secret": "str",
+    "refresh_token": "str",
     "output": "str",
     "keep_last": "int(0,)?",
     "filetypes": "str?"
-  },
-  "image": "dwelch2101/dropbox-sync-{arch}"
+  }
 }
