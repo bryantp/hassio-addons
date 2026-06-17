@@ -59,18 +59,57 @@ if [[ -n "$KEEP_LAST" ]]; then
 fi
 echo "[Info] ---------------------------------------"
 
+# dropbox_uploader.sh silently swallows refresh-token errors (it never
+# checks the HTTP status of the /oauth2/token call and just runs
+# requests with an empty Bearer token if the refresh failed), so do the
+# refresh exchange ourselves first and surface Dropbox's actual error.
 echo "[Info] Verifying Dropbox credentials..."
-if ! uploader info > /tmp/info_out 2>&1; then
-    echo "[Error] Dropbox authentication failed."
-    sed 's/^/[Error]   /' /tmp/info_out
-    print_last_response
-    echo "[Error] Common causes:"
-    echo "[Error]   * The Dropbox app's Permissions tab is missing files.content.write / files.content.read, or you forgot to click Submit at the bottom of that tab."
-    echo "[Error]   * The refresh_token was minted before the permissions were granted — re-run get_refresh_token.py to mint a new one."
-    echo "[Error]   * The app_key, app_secret, or refresh_token in the add-on Configuration tab is wrong."
+AUTH_RESPONSE=/tmp/oauth_resp
+HTTP_STATUS=$(curl -s -o "$AUTH_RESPONSE" -w "%{http_code}" \
+    -d grant_type=refresh_token \
+    -d "refresh_token=${REFRESH_TOKEN}" \
+    -u "${APP_KEY}:${APP_SECRET}" \
+    https://api.dropbox.com/oauth2/token || echo "000")
+
+if [[ "$HTTP_STATUS" != "200" ]] || ! jq -e '.access_token' "$AUTH_RESPONSE" > /dev/null 2>&1; then
+    echo "[Error] Dropbox refresh-token exchange failed (HTTP ${HTTP_STATUS})."
+    echo "[Error] Response body:"
+    sed 's/^/[Error]   /' "$AUTH_RESPONSE"
+    DROPBOX_ERROR=$(jq -r '.error // empty' "$AUTH_RESPONSE" 2>/dev/null || true)
+    case "$DROPBOX_ERROR" in
+        invalid_client)
+            echo "[Error] => 'invalid_client' means app_key and app_secret do not match a valid Dropbox app."
+            echo "[Error]    Check Settings tab in your Dropbox app for the correct App key and (click Show) App secret."
+            ;;
+        invalid_grant)
+            echo "[Error] => 'invalid_grant' means the refresh_token is bad — wrong app, revoked, or never offline-scoped."
+            echo "[Error]    Re-run get_refresh_token.py (which uses token_access_type=offline) to mint a new one."
+            ;;
+        *)
+            echo "[Error] Common causes:"
+            echo "[Error]   * The app_key, app_secret, or refresh_token in the add-on Configuration tab is wrong."
+            echo "[Error]   * The refresh_token was minted before the Dropbox app's Permissions were granted/submitted."
+            echo "[Error]   * The Dropbox app's Permissions tab is missing files.content.write / files.content.read, and Submit was never clicked at the bottom of that tab."
+            ;;
+    esac
     exit 1
 fi
-sed 's/^/[Info]   /' /tmp/info_out
+
+ACCOUNT_INFO=/tmp/account_info
+ACCESS_TOKEN=$(jq -r '.access_token' "$AUTH_RESPONSE")
+ACCOUNT_STATUS=$(curl -s -o "$ACCOUNT_INFO" -w "%{http_code}" \
+    -X POST \
+    -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+    https://api.dropboxapi.com/2/users/get_current_account || echo "000")
+
+if [[ "$ACCOUNT_STATUS" != "200" ]]; then
+    echo "[Error] Auth succeeded but get_current_account returned HTTP ${ACCOUNT_STATUS}."
+    echo "[Error] Response body:"
+    sed 's/^/[Error]   /' "$ACCOUNT_INFO"
+    exit 1
+fi
+
+echo "[Info]   Account: $(jq -r '.name.display_name' "$ACCOUNT_INFO") <$(jq -r '.email' "$ACCOUNT_INFO")>"
 echo "[Info] Authentication OK."
 
 echo "[Info] Listening for messages via stdin service call..."
