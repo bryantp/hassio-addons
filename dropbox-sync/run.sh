@@ -31,16 +31,20 @@ OAUTH_ACCESS_TOKEN=
 OAUTH_ACCESS_TOKEN_EXPIRE=0
 EOF
 
+# -d puts dropbox_uploader.sh in debug mode, which preserves the response
+# file at the known path /tmp/du_resp_debug so we can surface the actual
+# Dropbox error body when something fails. -s skips files that already
+# exist in Dropbox.
+RESPONSE_FILE=/tmp/du_resp_debug
+
 uploader() {
-    /dropbox_uploader.sh -s -f "$UPLOADER_CONF" "$@"
+    /dropbox_uploader.sh -d -s -f "$UPLOADER_CONF" "$@"
 }
 
 print_last_response() {
-    local last
-    last=$(ls -t /tmp/du_resp_* 2>/dev/null | head -1 || true)
-    if [[ -n "$last" && -s "$last" ]]; then
+    if [[ -s "$RESPONSE_FILE" ]]; then
         echo "[Debug] Dropbox response body:"
-        sed 's/^/[Debug]   /' "$last"
+        sed 's/^/[Debug]   /' "$RESPONSE_FILE"
     fi
 }
 
