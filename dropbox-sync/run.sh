@@ -13,6 +13,7 @@ CONFIG_REFRESH_TOKEN=$(jq --raw-output '.refresh_token // empty' "$CONFIG_PATH")
 OUTPUT_DIR=$(jq --raw-output '.output // empty' "$CONFIG_PATH")
 KEEP_LAST=$(jq --raw-output '.keep_last // empty' "$CONFIG_PATH")
 FILETYPES=$(jq --raw-output '.filetypes // empty' "$CONFIG_PATH")
+DEBUG=$(jq --raw-output '.debug // false' "$CONFIG_PATH")
 
 if [[ -z "$APP_KEY" || -z "$APP_SECRET" ]]; then
     echo "[Error] app_key and app_secret are required."
@@ -136,14 +137,25 @@ OAUTH_ACCESS_TOKEN=
 OAUTH_ACCESS_TOKEN_EXPIRE=0
 EOF
 
-# -d puts dropbox_uploader.sh in debug mode, which preserves the response
-# file at the known path /tmp/du_resp_debug. -s skips files that already
-# exist in Dropbox.
+# -d puts dropbox_uploader.sh in debug mode, which (a) preserves the
+# response file at the known path /tmp/du_resp_debug and (b) enables
+# bash xtrace on the script. We want (a) — without it the script
+# deletes the response file before we can dump it on failure — but
+# (b) floods the add-on log with `+ curl ...` lines for every chunk
+# upload. By default, swallow xtrace via stderr redirection. When the
+# `debug` config option is true, let it through.
+# -s skips files that already exist in Dropbox.
 RESPONSE_FILE=/tmp/du_resp_debug
 
-uploader() {
-    /dropbox_uploader.sh -d -s -f "$UPLOADER_CONF" "$@"
-}
+if [[ "$DEBUG" == "true" ]]; then
+    uploader() {
+        /dropbox_uploader.sh -d -s -f "$UPLOADER_CONF" "$@"
+    }
+else
+    uploader() {
+        /dropbox_uploader.sh -d -s -f "$UPLOADER_CONF" "$@" 2>/dev/null
+    }
+fi
 
 print_last_response() {
     if [[ -s "$RESPONSE_FILE" ]]; then

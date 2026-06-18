@@ -106,6 +106,7 @@ locally from this repo.)
 | `output` | yes | Path inside Dropbox where backups land. `/` means the app folder root. |
 | `keep_last` | no | If set, after each upload run, prune Supervisor backups so only the N newest survive. |
 | `filetypes` | no | Pipe-separated extensions (e.g. `jpg\|png`) — if set, also uploads matching files under `/share` on each run. |
+| `debug` | no | Default `false`. When `true`, prints the underlying uploader script's bash xtrace (`+ curl ...` lines for every chunk upload) into the add-on log. Useful only when diagnosing an upload failure no other log lines explain. |
 | `refresh_token` | no | Legacy: if set and there's no cached refresh_token yet, the add-on adopts this value. New installs don't need it. |
 
 ## Re-authorizing
