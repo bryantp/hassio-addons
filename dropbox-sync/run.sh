@@ -11,6 +11,7 @@ APP_SECRET=$(jq --raw-output '.app_secret // empty' "$CONFIG_PATH")
 AUTH_CODE=$(jq --raw-output '.auth_code // empty' "$CONFIG_PATH")
 CONFIG_REFRESH_TOKEN=$(jq --raw-output '.refresh_token // empty' "$CONFIG_PATH")
 OUTPUT_DIR=$(jq --raw-output '.output // empty' "$CONFIG_PATH")
+DISPLAY_PATH=$(jq --raw-output '.display_path // empty' "$CONFIG_PATH")
 KEEP_LAST=$(jq --raw-output '.keep_last // empty' "$CONFIG_PATH")
 FILETYPES=$(jq --raw-output '.filetypes // empty' "$CONFIG_PATH")
 DEBUG=$(jq --raw-output '.debug // false' "$CONFIG_PATH")
@@ -25,6 +26,25 @@ fi
 if [[ -z "$OUTPUT_DIR" ]]; then
     OUTPUT_DIR="/"
 fi
+
+# Render the friendly Dropbox-visible directory (DISPLAY_PATH + OUTPUT_DIR)
+# for log messages. Falls back to OUTPUT_DIR if no DISPLAY_PATH is set.
+resolved_dir() {
+    local d
+    if [[ -n "$DISPLAY_PATH" ]]; then
+        d="${DISPLAY_PATH%/}/${OUTPUT_DIR#/}"
+    else
+        d="$OUTPUT_DIR"
+    fi
+    echo "$d" | sed 's#/\+#/#g'
+}
+
+resolved_file() {
+    local dir
+    dir="$(resolved_dir)"
+    dir="${dir%/}"
+    echo "${dir}/$1"
+}
 
 print_authorize_url() {
     echo "[Info]   https://www.dropbox.com/oauth2/authorize?client_id=${APP_KEY}&response_type=code&token_access_type=offline"
@@ -175,7 +195,13 @@ echo "[Info] Backups source dir:    /backup"
 if [[ -n "$FILETYPES" ]]; then
     echo "[Info] Share source dir:      /share (extensions: ${FILETYPES})"
 fi
-echo "[Info] Dropbox destination:   ${OUTPUT_DIR}"
+echo "[Info] Dropbox destination:   $(resolved_dir)"
+if [[ -z "$DISPLAY_PATH" ]]; then
+    echo "[Info]   (this path is relative to the Dropbox app's scope. For an"
+    echo "[Info]    App-folder app the real Dropbox-visible prefix is"
+    echo "[Info]    /Apps/<your app folder name>. Set 'display_path' in the"
+    echo "[Info]    Configuration tab to that prefix to see the full path here.)"
+fi
 if [[ -n "$KEEP_LAST" ]]; then
     echo "[Info] Keep last:             ${KEEP_LAST} backup(s) on the Supervisor"
 fi
@@ -239,9 +265,12 @@ while read -r msg; do
     echo "[Info] Received message with command ${cmd}"
 
     if [[ "$cmd" = "upload" ]]; then
-        echo "[Info] Uploading all .tar files in /backup to ${OUTPUT_DIR} (skipping those already in Dropbox)"
+        echo "[Info] Uploading all .tar files in /backup to $(resolved_dir) (skipping those already in Dropbox)"
         shopt -s nullglob
         for f in /backup/*.tar; do
+            if [[ -n "$DISPLAY_PATH" ]]; then
+                echo "[Info] -> $(resolved_file "${f##*/}")"
+            fi
             if ! uploader upload "$f" "$OUTPUT_DIR"; then
                 echo "[Warn] Upload failed for $f"
                 print_last_response
@@ -258,6 +287,9 @@ while read -r msg; do
             echo "[Info] filetypes option is set, scanning /share for extensions: ${FILETYPES}"
             find /share -regextype posix-extended -regex "^.*\.(${FILETYPES})\$" -print0 \
                 | while IFS= read -r -d '' f; do
+                    if [[ -n "$DISPLAY_PATH" ]]; then
+                        echo "[Info] -> $(resolved_file "${f##*/}")"
+                    fi
                     if ! uploader upload "$f" "$OUTPUT_DIR"; then
                         echo "[Warn] Upload failed for $f"
                         print_last_response
