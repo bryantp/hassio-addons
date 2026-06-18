@@ -105,7 +105,8 @@ locally from this repo.)
 | `auth_code` | once | One-time authorization code, used only on first start (or to re-authorize). After exchange, the add-on remembers it and won't re-exchange the same code. |
 | `output` | yes | Path inside Dropbox where backups land, relative to the app's scope. `/` means the app folder root. |
 | `display_path` | no | Cosmetic. The path prefix as you see it in your real Dropbox (e.g. `/Apps/<your app folder name>`). When set, the startup banner and each upload log line show the full Dropbox-visible path. App-folder apps can't auto-discover this — the API isn't allowed to see outside the app's sandbox. |
-| `keep_last` | no | If set, after each upload run, prune Supervisor backups so only the N newest survive. |
+| `keep_last` | no | If set, after each upload run, prune **Supervisor-local** backups so only the N newest survive. Does NOT touch Dropbox. |
+| `dropbox_keep_last` | no | If set, after each upload run, prune **Dropbox** so only the N newest `*.tar` files in `output` survive. Independent of `keep_last`. Set both to the same value for true mirror mode. Only `*.tar` files are pruned, so `filetypes` uploads from `/share` are not touched. |
 | `filetypes` | no | Pipe-separated extensions (e.g. `jpg\|png`) — if set, also uploads matching files under `/share` on each run. |
 | `debug` | no | Default `false`. When `true`, prints the underlying uploader script's bash xtrace (`+ curl ...` lines for every chunk upload) into the add-on log. Useful only when diagnosing an upload failure no other log lines explain. |
 | `refresh_token` | no | Legacy: if set and there's no cached refresh_token yet, the add-on adopts this value. New installs don't need it. |

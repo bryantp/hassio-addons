@@ -13,6 +13,7 @@ CONFIG_REFRESH_TOKEN=$(jq --raw-output '.refresh_token // empty' "$CONFIG_PATH")
 OUTPUT_DIR=$(jq --raw-output '.output // empty' "$CONFIG_PATH")
 DISPLAY_PATH=$(jq --raw-output '.display_path // empty' "$CONFIG_PATH")
 KEEP_LAST=$(jq --raw-output '.keep_last // empty' "$CONFIG_PATH")
+DROPBOX_KEEP_LAST=$(jq --raw-output '.dropbox_keep_last // empty' "$CONFIG_PATH")
 FILETYPES=$(jq --raw-output '.filetypes // empty' "$CONFIG_PATH")
 DEBUG=$(jq --raw-output '.debug // false' "$CONFIG_PATH")
 
@@ -190,6 +191,105 @@ print_last_response() {
     fi
 }
 
+# Prune Dropbox to keep only the N newest .tar files in OUTPUT_DIR.
+# Lists OUTPUT_DIR via /2/files/list_folder (paginated), sorts entries by
+# server_modified ascending, and deletes the oldest until only N remain.
+# Restricted to *.tar so non-backup uploads (from FILETYPES) are not touched.
+prune_dropbox() {
+    local keep=$1
+    local fresh_resp=/tmp/prune_token_resp
+    local fresh_status fresh_token api_path
+
+    fresh_status=$(curl -s -o "$fresh_resp" -w "%{http_code}" \
+        -d grant_type=refresh_token \
+        -d "refresh_token=${REFRESH_TOKEN}" \
+        -u "${APP_KEY}:${APP_SECRET}" \
+        https://api.dropbox.com/oauth2/token || echo "000")
+    if [[ "$fresh_status" != "200" ]]; then
+        echo "[Warn] Dropbox prune: could not refresh access token (HTTP ${fresh_status})."
+        sed 's/^/[Warn]   /' "$fresh_resp"
+        return 1
+    fi
+    fresh_token=$(jq -r '.access_token' "$fresh_resp")
+
+    # Dropbox list_folder wants "" for the namespace root, "/foo" for a subdir.
+    api_path="${OUTPUT_DIR%/}"
+    [[ "$api_path" == "" || "$api_path" == "/" ]] && api_path=""
+
+    local entries_dir resp status has_more cursor page
+    entries_dir=$(mktemp -d)
+    page=0
+    resp="${entries_dir}/page_0"
+    status=$(curl -s -o "$resp" -w "%{http_code}" \
+        -X POST \
+        -H "Authorization: Bearer ${fresh_token}" \
+        -H "Content-Type: application/json" \
+        --data "{\"path\":\"${api_path}\"}" \
+        https://api.dropboxapi.com/2/files/list_folder || echo "000")
+    if [[ "$status" != "200" ]]; then
+        echo "[Warn] Dropbox prune: list_folder failed (HTTP ${status})."
+        sed 's/^/[Warn]   /' "$resp"
+        rm -rf "$entries_dir"
+        return 1
+    fi
+    has_more=$(jq -r '.has_more' "$resp")
+    cursor=$(jq -r '.cursor' "$resp")
+    while [[ "$has_more" == "true" ]]; do
+        page=$((page+1))
+        resp="${entries_dir}/page_${page}"
+        status=$(curl -s -o "$resp" -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${fresh_token}" \
+            -H "Content-Type: application/json" \
+            --data "{\"cursor\":\"${cursor}\"}" \
+            https://api.dropboxapi.com/2/files/list_folder/continue || echo "000")
+        if [[ "$status" != "200" ]]; then
+            echo "[Warn] Dropbox prune: list_folder/continue failed (HTTP ${status})."
+            sed 's/^/[Warn]   /' "$resp"
+            rm -rf "$entries_dir"
+            return 1
+        fi
+        has_more=$(jq -r '.has_more' "$resp")
+        cursor=$(jq -r '.cursor' "$resp")
+    done
+
+    local tar_entries
+    tar_entries=$(jq -s '[.[] | .entries[]] | map(select(.[".tag"] == "file" and (.name | endswith(".tar"))))' \
+        "${entries_dir}"/page_*)
+    local total=$(echo "$tar_entries" | jq 'length')
+    if [[ "$total" -le "$keep" ]]; then
+        echo "[Info] Dropbox prune: ${total} .tar files <= keep ${keep}, nothing to delete."
+        rm -rf "$entries_dir"
+        return 0
+    fi
+
+    local to_delete=$((total - keep))
+    echo "[Info] Dropbox prune: ${total} .tar files; keeping newest ${keep}, deleting oldest ${to_delete}."
+
+    local stale_paths
+    stale_paths=$(echo "$tar_entries" | jq -r "sort_by(.server_modified) | .[0:${to_delete}] | .[].path_lower")
+
+    while IFS= read -r dp; do
+        [[ -z "$dp" ]] && continue
+        local del_resp=/tmp/prune_del_resp
+        local del_status
+        del_status=$(curl -s -o "$del_resp" -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${fresh_token}" \
+            -H "Content-Type: application/json" \
+            --data "$(jq -n --arg p "$dp" '{path:$p}')" \
+            https://api.dropboxapi.com/2/files/delete_v2 || echo "000")
+        if [[ "$del_status" == "200" ]]; then
+            echo "[Info]   Deleted from Dropbox: ${dp}"
+        else
+            echo "[Warn]   Failed to delete from Dropbox: ${dp} (HTTP ${del_status})"
+            sed 's/^/[Warn]     /' "$del_resp"
+        fi
+    done <<< "$stale_paths"
+
+    rm -rf "$entries_dir"
+}
+
 echo "[Info] ----- Dropbox Sync configuration -----"
 echo "[Info] Backups source dir:    /backup"
 if [[ -n "$FILETYPES" ]]; then
@@ -204,6 +304,9 @@ if [[ -z "$DISPLAY_PATH" ]]; then
 fi
 if [[ -n "$KEEP_LAST" ]]; then
     echo "[Info] Keep last:             ${KEEP_LAST} backup(s) on the Supervisor"
+fi
+if [[ -n "$DROPBOX_KEEP_LAST" ]]; then
+    echo "[Info] Dropbox keep last:     ${DROPBOX_KEEP_LAST} .tar file(s) in Dropbox"
 fi
 echo "[Info] ---------------------------------------"
 
@@ -281,6 +384,11 @@ while read -r msg; do
         if [[ -n "$KEEP_LAST" ]]; then
             echo "[Info] keep_last option is set, pruning Supervisor backups..."
             python3 /keep_last.py "$KEEP_LAST" || echo "[Warn] keep_last cleanup failed"
+        fi
+
+        if [[ -n "$DROPBOX_KEEP_LAST" ]]; then
+            echo "[Info] dropbox_keep_last option is set, pruning Dropbox..."
+            prune_dropbox "$DROPBOX_KEEP_LAST" || echo "[Warn] dropbox_keep_last cleanup failed"
         fi
 
         if [[ -n "$FILETYPES" ]]; then
