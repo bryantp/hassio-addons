@@ -138,14 +138,16 @@ OAUTH_ACCESS_TOKEN_EXPIRE=0
 EOF
 
 # -d puts dropbox_uploader.sh in debug mode, which (a) preserves the
-# response file at the known path /tmp/du_resp_debug and (b) enables
-# bash xtrace on the script. We want (a) — without it the script
-# deletes the response file before we can dump it on failure — but
-# (b) floods the add-on log with `+ curl ...` lines for every chunk
-# upload. By default, swallow xtrace via stderr redirection. When the
-# `debug` config option is true, let it through.
+# response file at the known path /tmp/du_resp_debug, (b) enables
+# bash xtrace on stderr, and (c) prints a banner of script version
+# + uname -a + /etc/issue to stdout on EVERY invocation. We want (a)
+# — without it the script deletes the response file before we can
+# dump it on failure — but (b) and (c) are noise. With debug=false:
+# swallow xtrace (stderr) and filter the four known banner lines off
+# stdout. With debug=true: let everything through.
 # -s skips files that already exist in Dropbox.
 RESPONSE_FILE=/tmp/du_resp_debug
+DEBUG_NOISE_REGEX='^([0-9]+\.[0-9]+|Linux .* SMP |Welcome to Alpine|Kernel )'
 
 if [[ "$DEBUG" == "true" ]]; then
     uploader() {
@@ -153,7 +155,11 @@ if [[ "$DEBUG" == "true" ]]; then
     }
 else
     uploader() {
-        /dropbox_uploader.sh -d -s -f "$UPLOADER_CONF" "$@" 2>/dev/null
+        # pipefail propagates the uploader's exit status; the `|| true`
+        # on the grep side ensures the pipeline never falsely fails just
+        # because every output line happened to match the noise filter.
+        /dropbox_uploader.sh -d -s -f "$UPLOADER_CONF" "$@" 2>/dev/null \
+            | { grep -vE "$DEBUG_NOISE_REGEX" || true; }
     }
 fi
 
