@@ -1,6 +1,6 @@
 {
   "name": "Dropbox Sync",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "slug": "dropbox_sync",
   "description": "Upload your Home Assistant backups to Dropbox",
   "url": "https://github.com/danielwelch/hassio-dropbox-sync",
@@ -21,7 +21,8 @@
     "app_key": "",
     "app_secret": "",
     "auth_code": "",
-    "output": ""
+    "output": "",
+    "debug": false
   },
   "schema": {
     "app_key": "str",
@@ -30,6 +31,7 @@
     "refresh_token": "str?",
     "output": "str",
     "keep_last": "int(0,)?",
-    "filetypes": "str?"
+    "filetypes": "str?",
+    "debug": "bool?"
   }
 }
