@@ -191,9 +191,15 @@ print_last_response() {
     fi
 }
 
-# Prune Dropbox to keep only the N newest .tar files in OUTPUT_DIR.
-# Lists OUTPUT_DIR via /2/files/list_folder (paginated), sorts entries by
-# server_modified ascending, and deletes the oldest until only N remain.
+# Prune Dropbox to keep only the N newest .tar files PER NAME PREFIX in
+# OUTPUT_DIR. Home Assistant produces backup filenames of the form
+#   <Prefix>_<version>_<YYYY-MM-DD>_<HH>.<MM>_<hash>.tar
+# (e.g. AdGuard_Home_6.1.2_2026-06-12_14.17_56119900.tar). The regex below
+# strips the trailing version+date+time+hash so backups of each
+# addon/category share a prefix bucket. Per-bucket retention prevents the
+# daily Automatic_backup from evicting rarely-regenerated addon backups.
+# Files that do not match the HA pattern fall into a single "_unmatched"
+# bucket.
 # Restricted to *.tar so non-backup uploads (from FILETYPES) are not touched.
 prune_dropbox() {
     local keep=$1
@@ -253,21 +259,59 @@ prune_dropbox() {
         cursor=$(jq -r '.cursor' "$resp")
     done
 
-    local tar_entries
-    tar_entries=$(jq -s '[.[] | .entries[]] | map(select(.[".tag"] == "file" and (.name | endswith(".tar"))))' \
-        "${entries_dir}"/page_*)
-    local total=$(echo "$tar_entries" | jq 'length')
-    if [[ "$total" -le "$keep" ]]; then
-        echo "[Info] Dropbox prune: ${total} .tar files <= keep ${keep}, nothing to delete."
+    # Single jq pass: tag each .tar entry with the HA-pattern prefix,
+    # group by prefix, then per group compute total/keep/delete_paths.
+    local summary
+    summary=$(jq -s --argjson keep "$keep" '
+        [ .[] | .entries[] ]
+        | map(select(.[".tag"] == "file" and (.name | endswith(".tar"))))
+        | map(. + {
+            prefix: (
+                .name
+                | ((match("^(.+?)_[0-9]+(\\.[0-9]+)+_[0-9]{4}-[0-9]{2}-[0-9]{2}_") // null)
+                   | (if . == null then "_unmatched" else .captures[0].string end))
+            )
+          })
+        | group_by(.prefix)
+        | map({
+            prefix: (.[0].prefix),
+            total: length,
+            keep: ([length, $keep] | min),
+            delete_paths: (
+                (length - $keep) as $del
+                | if $del <= 0 then []
+                  else sort_by(.server_modified) | .[0:$del] | map(.path_lower)
+                  end
+            )
+          })
+    ' "${entries_dir}"/page_*)
+
+    local total_files total_to_delete num_groups
+    total_files=$(echo "$summary" | jq '[.[].total] | add // 0')
+    total_to_delete=$(echo "$summary" | jq '[.[].delete_paths | length] | add // 0')
+    num_groups=$(echo "$summary" | jq 'length')
+
+    if [[ "$total_files" == "0" ]]; then
+        echo "[Info] Dropbox prune: no .tar files in ${OUTPUT_DIR}, nothing to delete."
         rm -rf "$entries_dir"
         return 0
     fi
 
-    local to_delete=$((total - keep))
-    echo "[Info] Dropbox prune: ${total} .tar files; keeping newest ${keep}, deleting oldest ${to_delete}."
+    echo "[Info] Dropbox prune: per-prefix retention, keep newest ${keep} of each."
+    echo "[Info]   ${total_files} .tar file(s) across ${num_groups} prefix bucket(s); deleting ${total_to_delete} oldest."
+    echo "$summary" \
+        | jq -r '.[] | "  - \(.prefix): \(.total) file(s), keeping \(.keep), deleting \(.delete_paths | length)"' \
+        | while IFS= read -r line; do
+            echo "[Info]   $line"
+        done
+
+    if [[ "$total_to_delete" == "0" ]]; then
+        rm -rf "$entries_dir"
+        return 0
+    fi
 
     local stale_paths
-    stale_paths=$(echo "$tar_entries" | jq -r "sort_by(.server_modified) | .[0:${to_delete}] | .[].path_lower")
+    stale_paths=$(echo "$summary" | jq -r '.[].delete_paths[]')
 
     while IFS= read -r dp; do
         [[ -z "$dp" ]] && continue
@@ -280,10 +324,10 @@ prune_dropbox() {
             --data "$(jq -n --arg p "$dp" '{path:$p}')" \
             https://api.dropboxapi.com/2/files/delete_v2 || echo "000")
         if [[ "$del_status" == "200" ]]; then
-            echo "[Info]   Deleted from Dropbox: ${dp}"
+            echo "[Info]     Deleted from Dropbox: ${dp}"
         else
-            echo "[Warn]   Failed to delete from Dropbox: ${dp} (HTTP ${del_status})"
-            sed 's/^/[Warn]     /' "$del_resp"
+            echo "[Warn]     Failed to delete from Dropbox: ${dp} (HTTP ${del_status})"
+            sed 's/^/[Warn]       /' "$del_resp"
         fi
     done <<< "$stale_paths"
 
