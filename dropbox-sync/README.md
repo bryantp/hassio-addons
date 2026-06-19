@@ -7,16 +7,7 @@ This add-on is built locally by the Home Assistant Supervisor from the source
 in this directory — there is no published Docker image. First install takes a
 couple of minutes; subsequent updates are fast.
 
-## What changed in 2.1.0
-
-You no longer need to run a separate Python script to mint a refresh token.
-The add-on does the OAuth code exchange itself: paste a one-time auth code
-into the Configuration tab and the add-on stores the long-lived
-`refresh_token` in `/data/refresh_token`. Set-up is now fully inside the
-Home Assistant UI.
-
-The `refresh_token` field is still accepted (legacy compatibility), but you
-do not need it for new installs.
+See `CHANGELOG.md` (and the git log) for what's changed across versions.
 
 ## One-time setup
 
@@ -28,6 +19,13 @@ Go to <https://www.dropbox.com/developers/apps> and click **Create app**.
 - **Access type:** App folder (recommended — keeps the add-on sandboxed
   to one folder) or Full Dropbox
 - **Name:** anything you like
+
+> The App folder is named after your app: an App-folder app called
+> `My HA Backups` writes to `/Apps/My HA Backups/` in your Dropbox. To
+> rename it later, edit the app in the Dropbox developer console →
+> Settings → "Name of the app folder" → Save, and update `display_path`
+> in the add-on Configuration to match. There is no separate "directory
+> name" field.
 
 ### 2. Grant permissions (easy to miss)
 
@@ -110,6 +108,25 @@ locally from this repo.)
 | `filetypes` | no | Pipe-separated extensions (e.g. `jpg\|png`) — if set, also uploads matching files under `/share` on each run. |
 | `debug` | no | Default `false`. When `true`, prints the underlying uploader script's bash xtrace (`+ curl ...` lines for every chunk upload) into the add-on log. Useful only when diagnosing an upload failure no other log lines explain. |
 | `refresh_token` | no | Legacy: if set and there's no cached refresh_token yet, the add-on adopts this value. New installs don't need it. |
+
+## Retention
+
+The add-on can prune each side independently. There is no automatic
+deletion — Dropbox accumulates files forever unless you opt in.
+
+- `keep_last` deletes old **Supervisor-local** backups (Settings →
+  System → Backups in the HA UI) via the Supervisor `/backups` API.
+- `dropbox_keep_last` deletes old `*.tar` files in **Dropbox** via the
+  Dropbox API. Only `*.tar` is touched, so `filetypes` uploads from
+  `/share` are untouched.
+
+| Setup | Result |
+|---|---|
+| Neither set | Nothing is pruned. Both sides grow forever. |
+| Only `keep_last: N` | Supervisor keeps N newest locally; Dropbox grows forever. |
+| Only `dropbox_keep_last: N` | Dropbox keeps N newest; Supervisor untouched. |
+| Both equal, e.g. `5/5` | Mirror mode — both sides hold the same N newest. |
+| Asymmetric, e.g. `keep_last: 3, dropbox_keep_last: 30` | Thin local retention, deep Dropbox archive. The "small SSD, cheap cloud" setup. |
 
 ## Re-authorizing
 
