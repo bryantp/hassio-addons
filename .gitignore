@@ -1,0 +1,44 @@
+# Home Assistant add-on options snapshots (may contain refresh tokens / app secrets).
+options.json
+data/
+
+# Environment files (commonly hold API keys, app secrets).
+.env
+.env.*
+*.env
+
+# Local secrets / credentials / private keys.
+secrets.*
+credentials.*
+*.pem
+*.key
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+
+# macOS / Finder noise.
+.DS_Store
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+._*
+
+# Editor / IDE.
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python build artifacts (in case anyone runs the helper script in-tree).
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Backup files.
+*.bak
+*.orig
