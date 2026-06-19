@@ -25,4 +25,4 @@ repository is a personal fork that modernizes it for Dropbox API v2 and the
 current Home Assistant Supervisor.
 
 [upstream]: https://github.com/danielwelch/hassio-dropbox-sync
-[license-shield]: https://img.shields.io/badge/license-MIT-blue.svg?style=flat
+[license-shield]: https://img.shields.io/badge/license-Apache_2.0-blue.svg?style=flat
