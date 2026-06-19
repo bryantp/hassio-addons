@@ -104,7 +104,7 @@ locally from this repo.)
 | `output` | yes | Path inside Dropbox where backups land, relative to the app's scope. `/` means the app folder root. |
 | `display_path` | no | Cosmetic. The path prefix as you see it in your real Dropbox (e.g. `/Apps/<your app folder name>`). When set, the startup banner and each upload log line show the full Dropbox-visible path. App-folder apps can't auto-discover this — the API isn't allowed to see outside the app's sandbox. |
 | `keep_last` | no | If set, after each upload run, prune **Supervisor-local** backups so only the N newest survive. Does NOT touch Dropbox. |
-| `dropbox_keep_last` | no | If set, after each upload run, prune **Dropbox** so only the N newest `*.tar` files in `output` survive. Independent of `keep_last`. Set both to the same value for true mirror mode. Only `*.tar` files are pruned, so `filetypes` uploads from `/share` are not touched. |
+| `dropbox_keep_last` | no | If set, after each upload run, prune **Dropbox** so only the N newest `*.tar` files **per name prefix** survive (see Retention). Independent of `keep_last`. Only `*.tar` files are pruned, so `filetypes` uploads from `/share` are not touched. |
 | `filetypes` | no | Pipe-separated extensions (e.g. `jpg\|png`) — if set, also uploads matching files under `/share` on each run. |
 | `debug` | no | Default `false`. When `true`, prints the underlying uploader script's bash xtrace (`+ curl ...` lines for every chunk upload) into the add-on log. Useful only when diagnosing an upload failure no other log lines explain. |
 | `refresh_token` | no | Legacy: if set and there's no cached refresh_token yet, the add-on adopts this value. New installs don't need it. |
@@ -119,6 +119,21 @@ deletion — Dropbox accumulates files forever unless you opt in.
 - `dropbox_keep_last` deletes old `*.tar` files in **Dropbox** via the
   Dropbox API. Only `*.tar` is touched, so `filetypes` uploads from
   `/share` are untouched.
+
+`dropbox_keep_last` retains N newest **per name prefix**, not N newest
+globally. Home Assistant produces backup filenames of the form
+`<Prefix>_<version>_<YYYY-MM-DD>_<HH>.<MM>_<hash>.tar` — `<Prefix>` is
+the add-on name for partial backups (`AdGuard_Home`,
+`UniFi_Network_Application`, …) and the literal `Automatic_backup` for
+nightly full backups. Each prefix gets its own bucket. This prevents a
+steady stream of daily `Automatic_backup_*.tar` files from evicting
+rarely-regenerated add-on backups (an add-on backup only gets created
+when that add-on updates). Filenames that don't match the HA pattern
+fall into a single `_unmatched` bucket.
+
+The total Dropbox file count is therefore bounded by
+`dropbox_keep_last × (number of prefix buckets)`, not just
+`dropbox_keep_last`.
 
 | Setup | Result |
 |---|---|

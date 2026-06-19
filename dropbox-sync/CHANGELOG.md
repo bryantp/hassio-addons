@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.4.0
+
+- **Changed** `dropbox_keep_last` now retains N newest backups **per name prefix**, not N newest globally. Home Assistant generates per-add-on backup files (`AdGuard_Home_…`, `UniFi_Network_Application_…`, etc.) and full backups (`Automatic_backup_…`), and the old global ordering would let a steady stream of daily full backups evict rarely-regenerated add-on backups. Each prefix bucket is now capped independently. Filenames that do not match the HA pattern fall into a single `_unmatched` bucket. Note that total Dropbox file count is now bounded by `dropbox_keep_last × (number of prefix buckets)` rather than just `dropbox_keep_last`.
+
 ## 2.3.0
 
 - **Added** `dropbox_keep_last` config option. After each upload run, prunes oldest `*.tar` files from Dropbox so only the N newest survive. Independent of `keep_last` (Supervisor side) — set both to the same value for mirror mode, or asymmetric values (e.g. `keep_last: 3, dropbox_keep_last: 30`) for "thin local, deep cloud" retention. Only `*.tar` files are touched, so `filetypes` uploads from `/share` are unaffected.
